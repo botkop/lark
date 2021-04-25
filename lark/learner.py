@@ -1,9 +1,11 @@
 import dataclasses
 import glob
 import itertools
+import math
 import os
 import random
 from dataclasses import dataclass
+from typing import List
 
 import neptune
 import numpy as np
@@ -29,15 +31,36 @@ def f1(y_true, y_pred, thresh: float) -> float:
     return f
 
 
+def read_random_sig(folder: str, n_frames: int) -> torch.Tensor:
+    while True:
+        f = random.choice(glob.glob(f"{folder}/*.wav"))
+        tot_frames = ta.info(f).num_frames
+        if tot_frames > n_frames:
+            offset = random.randint(0, tot_frames - n_frames)
+            sig, _ = ta.load(filepath=f, frame_offset=offset, num_frames=n_frames)
+            return sig
+
+
+def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int) -> torch.Tensor:
+    power_a = torch.linalg.norm(sig_a)
+    power_b = torch.linalg.norm(sig_b)
+    snr = math.exp(snr_db / 10)
+    scale = snr * power_b / power_a
+    return (scale * sig_a + sig_b) / 2
+
+
 @dataclass
 class Config:
     # data parameters
     site: str
     data_dir: str = 'data/birdclef-2021'
+    noise_dir: str = '/home/koen/data/kaggle-birdsong-recognition-2020/noise/warblrb10k_public_wav/wav'
     bs: int = 32
     n_workers: int = 12
     training_dataset_size: int = bs * n_workers * 10
     duration: float = 5
+    add_noise: bool = True
+    snr_dbs: List[int] = [20, 10, 3]
 
     # sig parameters
     sr: int = 32000
@@ -108,10 +131,11 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         b = random.choice(self.labels)
-        f = random.choice(glob.glob(f"{self.cfg.data_dir}/train_short_audio.wav/{b}/*.wav"))
-        n_frames = ta.info(f).num_frames
-        offset = random.randint(0, n_frames - self.cfg.n_frames)
-        sig, _ = ta.load(filepath=f, frame_offset=offset, num_frames=self.cfg.n_frames)
+        sig = read_random_sig(f"{self.cfg.data_dir}/train_short_audio.wav/{b}", self.cfg.n_frames)
+        # f = random.choice(glob.glob(f"{self.cfg.data_dir}/train_short_audio.wav/{b}/*.wav"))
+        # n_frames = ta.info(f).num_frames
+        # offset = random.randint(0, n_frames - self.cfg.n_frames)
+        # sig, _ = ta.load(filepath=f, frame_offset=offset, num_frames=self.cfg.n_frames)
         label = torch.zeros(len(self.labels))
         label[self.indices[b]] = 1.0
         return sig, label
