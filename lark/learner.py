@@ -38,15 +38,19 @@ def read_random_sig(folder: str, n_frames: int) -> torch.Tensor:
         if tot_frames > n_frames:
             offset = random.randint(0, tot_frames - n_frames)
             sig, _ = ta.load(filepath=f, frame_offset=offset, num_frames=n_frames)
-            return sig
+            if not torch.isnan(sig).any() and sig.norm(p=2).item() != 0.0:
+                return sig
+            else:
+                print(f, offset)
 
 
 def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int) -> torch.Tensor:
-    power_a = torch.linalg.norm(sig_a)
-    power_b = torch.linalg.norm(sig_b)
+    power_a = sig_a.norm(p=2)
+    power_b = sig_b.norm(p=2)
     snr = math.exp(snr_db / 10)
     scale = snr * power_b / power_a
-    return (scale * sig_a + sig_b) / 2
+    merged = (scale * sig_a + sig_b) / 2
+    return merged
 
 
 @dataclass
@@ -54,13 +58,19 @@ class Config:
     # data parameters
     site: str
     data_dir: str = 'data/birdclef-2021'
-    noise_dir: str = '/home/koen/data/kaggle-birdsong-recognition-2020/noise/warblrb10k_public_wav/wav'
+    # noise_dir: str = 'data/noise/warblrb10k_public_wav/wav-32k'
+    noise_dir: str = 'data/noise/BirdVox-DCASE-20k/wav-32k'
     bs: int = 32
     n_workers: int = 12
     training_dataset_size: int = bs * n_workers * 10
     duration: float = 5
-    add_noise: bool = True
-    snr_dbs: List[int] = [20, 10, 3]
+
+    # augmentation
+    use_noise: bool = True
+    snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [3, 1])
+
+    # logging
+    use_neptune: bool = False
 
     # sig parameters
     sr: int = 32000
@@ -131,14 +141,16 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         b = random.choice(self.labels)
-        sig = read_random_sig(f"{self.cfg.data_dir}/train_short_audio.wav/{b}", self.cfg.n_frames)
-        # f = random.choice(glob.glob(f"{self.cfg.data_dir}/train_short_audio.wav/{b}/*.wav"))
-        # n_frames = ta.info(f).num_frames
-        # offset = random.randint(0, n_frames - self.cfg.n_frames)
-        # sig, _ = ta.load(filepath=f, frame_offset=offset, num_frames=self.cfg.n_frames)
         label = torch.zeros(len(self.labels))
         label[self.indices[b]] = 1.0
-        return sig, label
+        sig = read_random_sig(f"{self.cfg.data_dir}/train_short_audio.wav/{b}", self.cfg.n_frames)
+        if not self.cfg.use_noise:
+            return sig, label
+        while True:
+            noise = read_random_sig(self.cfg.noise_dir, self.cfg.n_frames)
+            merged = merge_sigs(sig, noise, random.choice(self.cfg.snr_dbs))
+            if not torch.isnan(merged).any():
+                return merged, label
 
     @property
     def loader(self):
@@ -195,6 +207,10 @@ class Experiment:
 
     def init(self, name: str, seed: int = 42):
         self.set_seed(seed)
-        neptune.init(project_qualified_name='botkop/lark')
-        neptune.create_experiment(name, params=self.cfg.as_dict())
+        if self.cfg.use_neptune:
+            neptune.init(project_qualified_name='botkop/lark')
+            neptune.create_experiment(name, params=self.cfg.as_dict())
 
+    def log_metric(self, mode: str = 'train', event: str = 'batch', name: str = 'loss', value: float = 0.0):
+        if self.cfg.use_neptune:
+            neptune.log_metric(f'{mode}_{event}_{name}', value)
