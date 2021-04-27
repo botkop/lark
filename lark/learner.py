@@ -1,11 +1,9 @@
-import dataclasses
 import glob
 import itertools
 import math
 import os
 import random
-from dataclasses import dataclass
-from typing import List
+from datetime import datetime
 
 import neptune
 import numpy as np
@@ -13,24 +11,10 @@ import pandas as pd
 import torch
 import torchaudio as ta
 from torch.utils.data import Dataset, DataLoader
-from torchaudio import transforms as tat
+from tqdm.notebook import tqdm
 
-from lark.Cnn14_DecisionLevelAtt import PANNsLoss
-
-
-def f1(y_true: torch.Tensor, y_pred: torch.Tensor, thresh: float) -> float:
-    tp = (y_pred[torch.where(y_true == 1)] >= thresh).sum()
-    # tn = (y_pred[torch.where(y_true == 0)] < thresh).sum()
-    fp = (y_pred[torch.where(y_true == 0)] >= thresh).sum()
-    fn = (y_pred[torch.where(y_true == 1)] < thresh).sum()
-    if tp + fp + fn == 0:
-        f = 1.0
-    else:
-        f = tp / (tp + (fp + fn) / 2)
-        f = f.item()
-    # d = {"tp": tp.item(), "tn": tn.item(), "fp": fp.item(), "fn": fn.item(), "f1": f.item()}
-    # return d
-    return f
+from lark.config import Config
+from lark.ops import f1
 
 
 def read_random_sig(folder: str, n_frames: int) -> torch.Tensor:
@@ -53,80 +37,6 @@ def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int) -> torch.T
     scale = snr * power_b / power_a
     merged = (scale * sig_a + sig_b) / 2
     return merged
-
-
-@dataclass
-class Config:
-    # data parameters
-    site: str
-    data_dir: str = 'data/birdclef-2021'
-    bs: int = 32
-    n_workers: int = 12
-    training_dataset_size: int = bs * n_workers * 28  # 28 = number of labels
-    duration: float = 5
-
-    # augmentation
-    use_noise: bool = True
-    # noise_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [3, 1])
-    noise_nsr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
-    noise_dir: str = 'data/noise/BirdVox-DCASE-20k/wav-32k'
-    use_overlays: bool = True
-    max_overlays: int = 5
-    overlay_weights: List[float] = dataclasses.field(default_factory=lambda: [
-        0.71986223,
-        0.21010333,
-        0.06314581,
-        0.00574053,
-        0.00114811])
-    overlay_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
-
-    # logging
-    use_neptune: bool = False
-
-    # sig parameters
-    sr: int = 32000
-    n_frames: int = duration * sr
-    n_fft: int = 512
-    window_length: int = 512
-    n_mels: int = 64
-    hop_length: int = 312
-    f_min: int = 150
-    f_max: int = 15000
-
-    # learner parameters
-    lr: float = 1e-4
-    n_epochs: int = 10
-    loss_fn: str = 'pann'
-    optimizer: str = 'Adam'
-    scheduler: str = 'OneCycleLR'
-
-    @property
-    def labels(self):
-        df_ss = pd.read_csv(f"{self.data_dir}/train_soundscape_labels.csv")
-        if self.site is not None:
-            df_ss = df_ss[df_ss['site'] == self.site].reset_index(drop=True)
-        labels = [x for x in sorted(set(itertools.chain(*df_ss['birds'].str.split(' ')))) if x != 'nocall']
-        return labels
-
-    def as_dict(self):
-        d = dataclasses.asdict(self)
-        d['labels'] = self.labels
-        return d
-
-    @property
-    def instantiate_loss(self):
-        if self.loss_fn:
-            return PANNsLoss
-
-    @property
-    def instantiate_optimizer(self):
-        if self.optimizer == 'Adam':
-            return torch.optim.Adam
-
-    @property
-    def instantiate_scheduler(self):
-        if self.scheduler == 'OneCycleLR':
-            return torch.optim.lr_scheduler.OneCycleLR
 
 
 class ValidDataset(Dataset):
@@ -202,38 +112,6 @@ class TrainDataset(Dataset):
         return dl
 
 
-class Sig2Spec(torch.nn.Module):
-    def __init__(self, cfg: Config):
-        super().__init__()
-        self.melspec = tat.MelSpectrogram(
-            sample_rate=cfg.sr,
-            n_fft=cfg.n_fft,
-            win_length=cfg.window_length,
-            hop_length=cfg.hop_length,
-            f_min=cfg.f_min,
-            f_max=cfg.f_max,
-            pad=0,
-            n_mels=cfg.n_mels,
-            power=2.0,
-            normalized=True, )
-        self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
-
-    @staticmethod
-    def normalize(spec: torch.Tensor) -> torch.Tensor:
-        spec -= spec.min()
-        if spec.max() != 0:
-            spec /= spec.max()
-        else:
-            spec = torch.clamp(spec, 0, 1)
-        return spec
-
-    def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        spec = self.melspec(sig)
-        spec = self.p2db(spec)
-        spec = self.normalize(spec)
-        return spec
-
-
 class Experiment:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -258,3 +136,72 @@ class Experiment:
     def log_metric(self, mode: str = 'train', event: str = 'batch', name: str = 'loss', value: float = 0.0):
         if self.cfg.use_neptune:
             neptune.log_metric(f'{mode}_{event}_{name}', value)
+
+
+class Learner:
+    def __init__(self, exp_name: str, cfg: Config):
+        self.cfg = cfg
+        self.vdl = ValidDataset(cfg).loader
+        self.tdl = TrainDataset(cfg).loader
+        self.loss_fn = cfg.instantiate_loss().cuda()
+        self.model = cfg.instantiate_model().load(cfg).cuda()
+        self.optimizer = cfg.instantiate_optimizer(self.model.parameters())
+        self.scheduler = cfg.instantiate_scheduler(self.optimizer)
+        self.exp = Experiment(cfg)
+        self.exp.init(f"{exp_name} {datetime.now()}")
+
+    def tv_loop(self, dl, mode):
+        if mode == 'train':
+            self.model.train()
+        else:
+            self.model.eval()
+
+        tot_loss = 0
+        tot_score = 0
+
+        def inner_loop(pbar):
+            nonlocal tot_loss
+            nonlocal tot_score
+            for x, y in pbar:
+                x = x.cuda()
+                y = y.cuda()
+                pred = self.model(x)
+                loss = self.loss_fn(pred, y)
+                score = f1(y, pred, 0.5)
+
+                pbar.set_description(f"{mode} loss: {loss:>8f} f1: {score:>8f}")
+                self.exp.log_metric(mode, 'batch', 'loss', loss)
+                self.exp.log_metric(mode, 'batch', 'f1', score)
+
+                tot_loss += loss.item()
+                tot_score += score
+                if mode == 'train':
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    self.scheduler.step()
+
+        with tqdm(dl, leave=False) as pbar:
+            if mode == 'valid':
+                with torch.no_grad():
+                    inner_loop(pbar)
+            else:
+                inner_loop(pbar)
+
+        n_batches = len(dl)
+        tot_loss /= n_batches
+        tot_score /= n_batches
+        return tot_loss, tot_score
+
+    def learn(self):
+        with tqdm(range(self.cfg.n_epochs)) as pbar:
+            for epoch in pbar:
+                train_loss, train_score = self.tv_loop(self.tdl, 'train')
+                valid_loss, valid_score = self.tv_loop(self.vdl, 'valid')
+                msg = f"epoch: {epoch + 1:3d} train loss: {train_loss:>8f} train f1: {train_score:>8f} valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
+                print(msg)
+                self.exp.log_metric('train', 'epoch', 'loss', train_loss)
+                self.exp.log_metric('valid', 'epoch', 'loss', valid_loss)
+                self.exp.log_metric('train', 'epoch', 'f1', train_score)
+                self.exp.log_metric('valid', 'epoch', 'f1', valid_score)
+

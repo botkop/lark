@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from lark.learner import Sig2Spec
+from lark.ops import Sig2Spec
 
 
 def init_layer(layer):
