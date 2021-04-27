@@ -15,8 +15,10 @@ import torchaudio as ta
 from torch.utils.data import Dataset, DataLoader
 from torchaudio import transforms as tat
 
+from lark.Cnn14_DecisionLevelAtt import PANNsLoss
 
-def f1(y_true, y_pred, thresh: float) -> float:
+
+def f1(y_true: torch.Tensor, y_pred: torch.Tensor, thresh: float) -> float:
     tp = (y_pred[torch.where(y_true == 1)] >= thresh).sum()
     # tn = (y_pred[torch.where(y_true == 0)] < thresh).sum()
     fp = (y_pred[torch.where(y_true == 0)] >= thresh).sum()
@@ -41,7 +43,7 @@ def read_random_sig(folder: str, n_frames: int) -> torch.Tensor:
             if not torch.isnan(sig).any() and sig.norm(p=2).item() != 0.0:
                 return sig
             else:
-                print(f, offset)
+                print(f"skipping file {f} offset {offset}: invalid signal")
 
 
 def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int) -> torch.Tensor:
@@ -58,16 +60,25 @@ class Config:
     # data parameters
     site: str
     data_dir: str = 'data/birdclef-2021'
-    # noise_dir: str = 'data/noise/warblrb10k_public_wav/wav-32k'
-    noise_dir: str = 'data/noise/BirdVox-DCASE-20k/wav-32k'
     bs: int = 32
     n_workers: int = 12
-    training_dataset_size: int = bs * n_workers * 10
+    training_dataset_size: int = bs * n_workers * 28  # 28 = number of labels
     duration: float = 5
 
     # augmentation
     use_noise: bool = True
-    snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [3, 1])
+    # noise_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [3, 1])
+    noise_nsr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
+    noise_dir: str = 'data/noise/BirdVox-DCASE-20k/wav-32k'
+    use_overlays: bool = True
+    max_overlays: int = 5
+    overlay_weights: List[float] = dataclasses.field(default_factory=lambda: [
+        0.71986223,
+        0.21010333,
+        0.06314581,
+        0.00574053,
+        0.00114811])
+    overlay_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
 
     # logging
     use_neptune: bool = False
@@ -82,6 +93,13 @@ class Config:
     f_min: int = 150
     f_max: int = 15000
 
+    # learner parameters
+    lr: float = 1e-4
+    n_epochs: int = 10
+    loss_fn: str = 'pann'
+    optimizer: str = 'Adam'
+    scheduler: str = 'OneCycleLR'
+
     @property
     def labels(self):
         df_ss = pd.read_csv(f"{self.data_dir}/train_soundscape_labels.csv")
@@ -94,6 +112,21 @@ class Config:
         d = dataclasses.asdict(self)
         d['labels'] = self.labels
         return d
+
+    @property
+    def instantiate_loss(self):
+        if self.loss_fn:
+            return PANNsLoss
+
+    @property
+    def instantiate_optimizer(self):
+        if self.optimizer == 'Adam':
+            return torch.optim.Adam
+
+    @property
+    def instantiate_scheduler(self):
+        if self.scheduler == 'OneCycleLR':
+            return torch.optim.lr_scheduler.OneCycleLR
 
 
 class ValidDataset(Dataset):
@@ -139,18 +172,29 @@ class TrainDataset(Dataset):
     def __len__(self):
         return self.size
 
-    def __getitem__(self, idx):
+    def read_sig(self):
         b = random.choice(self.labels)
-        label = torch.zeros(len(self.labels))
-        label[self.indices[b]] = 1.0
         sig = read_random_sig(f"{self.cfg.data_dir}/train_short_audio.wav/{b}", self.cfg.n_frames)
-        if not self.cfg.use_noise:
-            return sig, label
-        while True:
+        return sig, self.indices[b]
+
+    def assemble_sig(self):
+        label = torch.zeros(len(self.labels))
+        base_sig, b = self.read_sig()
+        label[b] = 1.0
+        if self.cfg.use_overlays:
+            n_overlays = random.choices(range(self.cfg.max_overlays), weights=self.cfg.overlay_weights)[0]
+            for _ in range(n_overlays):
+                sig, b = self.read_sig()
+                base_sig = merge_sigs(base_sig, sig, random.choice(self.cfg.overlay_snr_dbs))
+                label[b] = 1.0
+        if self.cfg.use_noise:
             noise = read_random_sig(self.cfg.noise_dir, self.cfg.n_frames)
-            merged = merge_sigs(sig, noise, random.choice(self.cfg.snr_dbs))
-            if not torch.isnan(merged).any():
-                return merged, label
+            # base_sig = merge_sigs(base_sig, noise, random.choice(self.cfg.noise_snr_dbs))
+            base_sig = merge_sigs(noise, base_sig, random.choice(self.cfg.noise_nsr_dbs))
+        return base_sig, label
+
+    def __getitem__(self, idx):
+        return self.assemble_sig()
 
     @property
     def loader(self):
