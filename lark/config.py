@@ -6,16 +6,13 @@ from typing import List
 
 import pandas as pd
 
-import torch
-
-# from torch.optim import *
-# from torch.optim.lr_scheduler import *
 
 @dataclass
 class Config:
     # data parameters
     site: str
     data_dir: str = 'data/birdclef-2021'
+    checkpoint_dir: str = 'checkpoints'
     bs: int = 32
     n_workers: int = 12
     training_dataset_size: int = bs * n_workers * 28  # 28 = number of labels
@@ -49,7 +46,7 @@ class Config:
     f_max: int = 15000
 
     # learner parameters
-    lr: float = 1e-4
+    lr: float = 1e-3
     n_epochs: int = 10
     loss_fn: str = 'PANNsLoss'
     optimizer: str = 'torch.optim.Adam'
@@ -79,19 +76,23 @@ class Config:
 
     @property
     def instantiate_model(self):
-        from lark.pann import Cnn14_DecisionLevelAtt
+        import torch  # type: ignore
+        from lark.pann import Cnn14_DecisionLevelAtt  # type: ignore
         return eval(self.model)
 
     @property
     def instantiate_loss(self):
-        from lark.pann import PANNsLoss
+        import torch  # type: ignore
+        from lark.pann import PANNsLoss  # type: ignore
         return eval(self.loss_fn)
 
     @property
     def instantiate_optimizer(self):
+        import torch  # type: ignore
         return partial(eval(self.optimizer), lr=self.lr)
 
     @property
     def instantiate_scheduler(self):
+        import torch  # type: ignore
         return partial(eval(self.scheduler), **self.scheduler_params)
 
