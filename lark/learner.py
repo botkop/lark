@@ -58,46 +58,44 @@ class Learner:
         self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         self.exp = Experiment(cfg)
 
-    def work_loop(self, pbar, mode, f1_threshold):
+    def epoch_loop(self, dl, mode, f1_threshold):
         from lark.ops import f1
         tl = 0
         ps = []
         ys = []
-        n_batches = len(pbar)
-        for x, y in pbar:
-            x = x.cuda()
-            y = y.cuda()
-            pred = self.model(x)
-            loss = self.loss_fn(pred, y)
-            with torch.no_grad():
-                ps.append(pred.sigmoid())
-                ys.append(y)
+        n_batches = len(dl)
+        with tqdm(dl, leave=False) as pbar:
+            for x, y in pbar:
+                x = x.cuda()
+                y = y.cuda()
+                pred = self.model(x)
+                loss = self.loss_fn(pred, y)
+                with torch.no_grad():
+                    ps.append(pred.sigmoid())
+                    ys.append(y)
 
-            pbar.set_description(f"{mode} loss: {loss:>8f}")
-            self.exp.log_metric(mode, 'batch', 'loss', loss)
+                pbar.set_description(f"{mode} loss: {loss:>8f}")
+                self.exp.log_metric(mode, 'batch', 'loss', loss)
 
-            tl += loss.item()
-            if mode == 'train':
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                self.scheduler.step()
+                tl += loss.item()
+                if mode == 'train':
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                    self.scheduler.step()
 
-        ts = f1(torch.cat(ys), torch.cat(ps), f1_threshold)['f1']
-        tl /= n_batches
-        return tl, ts
+            ts = f1(torch.cat(ys), torch.cat(ps), f1_threshold)['f1']
+            tl /= n_batches
+            return tl, ts
 
     def tv_loop(self, dl, mode, f1_threshold=0.5):
         if mode == 'train':
             self.model.train()
+            epoch_loss, epoch_score = self.epoch_loop(dl, mode, f1_threshold)
         else:
             self.model.eval()
-        with tqdm(dl, leave=False) as pbar:
-            if mode == 'train':
-                epoch_loss, epoch_score = self.work_loop(pbar, mode, f1_threshold)
-            else:
-                with torch.no_grad():
-                    epoch_loss, epoch_score = self.work_loop(pbar, mode, f1_threshold)
+            with torch.no_grad():
+                epoch_loss, epoch_score = self.epoch_loop(dl, mode, f1_threshold)
         return epoch_loss, epoch_score
 
     def learn(self):
