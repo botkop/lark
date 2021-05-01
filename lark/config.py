@@ -39,7 +39,7 @@ class Config:
     sr: int = 32000
     n_frames: int = duration * sr
     n_fft: int = 512
-    window_length: int = 512
+    window_length: int = n_fft
     n_mels: int = 64
     hop_length: int = 312
     f_min: int = 150
@@ -48,17 +48,28 @@ class Config:
     # learner parameters
     lr: float = 1e-3
     n_epochs: int = 10
-    loss_fn: str = 'PANNsLoss'
-    optimizer: str = 'torch.optim.Adam'
-    scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
     model: str = 'Cnn14_DecisionLevelAtt'
+    optimizer: str = 'torch.optim.Adam'
+    loss_fn: str = 'torch.nn.BCEWithLogitsLoss'
+    # loss_fn: str = 'PANNsLoss'
+    scheduler: str = 'torch.optim.lr_scheduler.CosineAnnealingLR'
+    # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
+
+    default_scheduler_params = {
+        "torch.optim.lr_scheduler.OneCycleLR": {
+            "max_lr": lr * 10,
+            "steps_per_epoch": training_dataset_size,
+            "epochs": n_epochs
+        },
+        'torch.optim.lr_scheduler.CosineAnnealingLR': {
+            "eta_min": 1e-5,
+            "T_max":  n_epochs
+        }
+    }
 
     @property
     def scheduler_params(self):
-        return dict(
-            max_lr=self.lr * 10,
-            steps_per_epoch=self.training_dataset_size,
-            epochs=self.n_epochs)
+        return self.default_scheduler_params[self.scheduler]
 
     @property
     def labels(self):

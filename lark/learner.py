@@ -1,9 +1,11 @@
+import gc
 import os
 import random
 from datetime import datetime
 
 import neptune
 import numpy as np
+import pandas as pd
 import torch
 from tqdm.notebook import tqdm
 
@@ -42,12 +44,15 @@ class Experiment:
 
 
 class Learner:
-    def __init__(self, exp_name: str, cfg: Config):
+    def __init__(self, exp_name: str, cfg: Config, model: torch.nn.Module = None):
         self.cfg = cfg
         self.vdl = ValidDataset(cfg).loader
         self.tdl = TrainDataset(cfg).loader
         self.loss_fn = cfg.instantiate_loss().cuda()
-        self.model = cfg.instantiate_model().load(cfg).cuda()
+        if model:
+            self.model = model
+        else:
+            self.model = cfg.instantiate_model().load(cfg).cuda()
         self.optimizer = cfg.instantiate_optimizer(self.model.parameters())
         self.scheduler = cfg.instantiate_scheduler(self.optimizer)
         self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -56,25 +61,30 @@ class Learner:
     def work_loop(self, pbar, mode, f1_threshold):
         from lark.ops import f1
         tl = 0
-        ts = 0
+        ps = []
+        ys = []
+        n_batches = len(pbar)
         for x, y in pbar:
             x = x.cuda()
             y = y.cuda()
             pred = self.model(x)
             loss = self.loss_fn(pred, y)
-            score = f1(y, pred, f1_threshold)
+            with torch.no_grad():
+                ps.append(pred.sigmoid())
+                ys.append(y)
 
-            pbar.set_description(f"{mode} loss: {loss:>8f} f1: {score:>8f}")
+            pbar.set_description(f"{mode} loss: {loss:>8f}")
             self.exp.log_metric(mode, 'batch', 'loss', loss)
-            self.exp.log_metric(mode, 'batch', 'f1', score)
 
             tl += loss.item()
-            ts += score
             if mode == 'train':
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
                 self.scheduler.step()
+
+        ts = f1(torch.cat(ys), torch.cat(ps), f1_threshold)['f1']
+        tl /= n_batches
         return tl, ts
 
     def tv_loop(self, dl, mode, f1_threshold=0.5):
@@ -82,20 +92,18 @@ class Learner:
             self.model.train()
         else:
             self.model.eval()
-
         with tqdm(dl, leave=False) as pbar:
             if mode == 'train':
-                tot_loss, tot_score = self.work_loop(pbar, mode, f1_threshold)
+                epoch_loss, epoch_score = self.work_loop(pbar, mode, f1_threshold)
             else:
                 with torch.no_grad():
-                    tot_loss, tot_score = self.work_loop(pbar, mode, f1_threshold)
-
-        n_batches = len(dl)
-        tot_loss /= n_batches
-        tot_score /= n_batches
-        return tot_loss, tot_score
+                    epoch_loss, epoch_score = self.work_loop(pbar, mode, f1_threshold)
+        return epoch_loss, epoch_score
 
     def learn(self):
+        gc.collect()
+        torch.cuda.empty_cache()
+
         self.exp.init(self.name)
         last_valid_loss = np.inf
         with tqdm(range(self.cfg.n_epochs)) as pbar:
@@ -113,12 +121,24 @@ class Learner:
                     last_valid_loss = valid_loss
         self.exp.finish()
 
-    def valid_loop(self, f1_threshold: float):
-        oun = self.cfg.use_neptune
-        self.cfg.use_neptune = False
-        r = self.tv_loop(self.vdl, 'valid', f1_threshold)
-        self.cfg.use_neptune = oun
-        return r
+    def evaluate(self):
+        from lark.ops import f1
+        self.model.eval()
+        with torch.no_grad():
+            ps = []
+            ys = []
+            for x, y in tqdm(self.vdl):
+                x = x.cuda()
+                y = y.cuda()
+                pred = self.model(x).sigmoid()
+                ps.append(pred)
+                ys.append(y)
+            ps = torch.cat(ps)
+            ys = torch.cat(ys)
+            ts = np.arange(0.0, 1.1, 0.1)
+            rs = [f1(ys, ps, t) for t in ts]
+            df = pd.DataFrame(rs)
+            return df
 
     def save_checkpoint(self, epoch: int, valid_loss: float, valid_score: float):
         fname = f"{self.cfg.checkpoint_dir}/{self.name}.pt"
