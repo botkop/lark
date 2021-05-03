@@ -3,6 +3,7 @@ from typing import Dict
 import torch
 import torchvision
 from torchaudio import transforms as tat
+from torchvision import transforms
 
 from lark.config import Config
 
@@ -65,7 +66,7 @@ class Sig2Spec(torch.nn.Module):
 
 
 class MixedSig2Spec(torch.nn.Module):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, forward_as_image: bool = False):
         super().__init__()
 
         window_lengths = [800, 1600, 3200]
@@ -81,12 +82,14 @@ class MixedSig2Spec(torch.nn.Module):
             pad=0,
             n_mels=128,
             power=2.0,
-            normalized=True,
+            normalized=False,
         ).cuda() for i in range(3)]
 
-        self.resize = torchvision.transforms.Resize((128, 250))
-
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
+        self.forward_as_image = forward_as_image
+        self.tf_resize = torchvision.transforms.Resize((128, 250))
+        # self.tf_resize = torchvision.transforms.Resize((224, 224))
+        self.tf_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     @staticmethod
     def normalize(spec: torch.Tensor) -> torch.Tensor:
@@ -98,9 +101,13 @@ class MixedSig2Spec(torch.nn.Module):
         return spec
 
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        # note: assuming batch input
         with torch.no_grad():
-            imgs = [self.resize(self.p2db(ms(sig))) for ms in self.melspecs]  # 3 * [bs x 1 x H x W]
+            imgs = [self.tf_resize(self.p2db(ms(sig))) for ms in self.melspecs]  # 3 * [bs x 1 x H x W]
             spec = torch.cat([x.transpose(0, 1) for x in imgs]).transpose(0, 1)
-            spec = self.normalize(spec)
+            # note: tf_norm(spec) == tf_norm(normalize(spec))
+            if self.forward_as_image:
+                spec = self.normalize(spec)
+            else:
+                spec = self.tf_norm(spec)
             return spec
-

@@ -108,7 +108,10 @@ class Learner:
             for epoch in pbar:
                 train_loss, train_score = self.tv_loop(self.tdl, 'train')
                 valid_loss, valid_score = self.tv_loop(self.vdl, 'valid')
-                msg = f"epoch: {epoch + 1:3d} train loss: {train_loss:>8f} train f1: {train_score:>8f} valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
+                msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} " \
+                      f"epoch: {epoch + 1:3d} " \
+                      f"train loss: {train_loss:>8f} train f1: {train_score:>8f} " \
+                      f"valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
                 print(msg)
                 self.exp.log_metric('train', 'epoch', 'loss', train_loss)
                 self.exp.log_metric('valid', 'epoch', 'loss', valid_loss)
