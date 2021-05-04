@@ -1,5 +1,7 @@
 import dataclasses
+import glob
 import itertools
+import os.path
 from dataclasses import dataclass
 from functools import partial
 from typing import List
@@ -10,12 +12,11 @@ import pandas as pd
 @dataclass
 class Config:
     # data parameters
-    site: str
+    sites: List[str]
     data_dir: str = 'data/birdclef-2021'
     checkpoint_dir: str = 'checkpoints'
     bs: int = 32
     n_workers: int = 12
-    training_dataset_size: int = bs * n_workers * 28  # 28 = number of labels
     duration: float = 5
 
     # augmentation
@@ -33,7 +34,7 @@ class Config:
     overlay_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
 
     # logging
-    use_neptune: bool = False
+    use_neptune: bool = True
 
     # sig parameters
     sr: int = 32000
@@ -55,29 +56,42 @@ class Config:
     scheduler: str = 'torch.optim.lr_scheduler.CosineAnnealingLR'
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
 
-    default_scheduler_params = {
-        "torch.optim.lr_scheduler.OneCycleLR": {
-            "max_lr": lr * 10,
-            "steps_per_epoch": training_dataset_size,
-            "epochs": n_epochs
-        },
-        'torch.optim.lr_scheduler.CosineAnnealingLR': {
-            "eta_min": 1e-5,
-            "T_max":  n_epochs
-        }
-    }
+    # @property
+    # def scheduler_params(self):
+    #     return self.default_scheduler_params[self.scheduler]
 
     @property
     def scheduler_params(self):
-        return self.default_scheduler_params[self.scheduler]
+        default_params = {
+            "torch.optim.lr_scheduler.OneCycleLR": {
+                "max_lr": self.lr * 10,
+                "steps_per_epoch": self.training_dataset_size // self.bs,
+                "epochs": self.n_epochs
+            },
+            'torch.optim.lr_scheduler.CosineAnnealingLR': {
+                "eta_min": 1e-5,
+                "T_max": self.n_epochs
+            }
+        }
+        return default_params[self.scheduler]
 
     @property
     def labels(self):
-        df_ss = pd.read_csv(f"{self.data_dir}/train_soundscape_labels.csv")
-        if self.site is not None:
-            df_ss = df_ss[df_ss['site'] == self.site].reset_index(drop=True)
-        labels = [x for x in sorted(set(itertools.chain(*df_ss['birds'].str.split(' ')))) if x != 'nocall']
+        if self.sites is not None:
+            df_ss = pd.read_csv(f"{self.data_dir}/train_soundscape_labels.csv")
+            df_ss = df_ss[df_ss['site'].isin(self.sites)].reset_index(drop=True)
+            labels = [x for x in sorted(set(itertools.chain(*df_ss['birds'].str.split(' ')))) if x != 'nocall']
+        else:
+            labels = sorted([os.path.basename(d) for d in glob.glob(f"{self.data_dir}/train_short_audio.wav/*")])
         return labels
+
+    @property
+    def n_labels(self):
+        return len(self.labels)
+
+    @property
+    def training_dataset_size(self):
+        return self.bs * self.n_workers * self.n_labels
 
     def as_dict(self):
         d = dataclasses.asdict(self)
@@ -106,4 +120,3 @@ class Config:
     def instantiate_scheduler(self):
         import torch  # type: ignore
         return partial(eval(self.scheduler), **self.scheduler_params)
-

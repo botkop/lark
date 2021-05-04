@@ -118,8 +118,9 @@ class Learner:
                 self.exp.log_metric('train', 'epoch', 'f1', train_score)
                 self.exp.log_metric('valid', 'epoch', 'f1', valid_score)
                 if valid_loss <= last_valid_loss:
-                    self.save_checkpoint(epoch, valid_loss, valid_score)
+                    self.save_checkpoint('best', epoch, valid_loss, valid_score)
                     last_valid_loss = valid_loss
+                self.save_checkpoint('latest', epoch, valid_loss, valid_score)
         self.exp.finish()
 
     def evaluate(self):
@@ -141,8 +142,8 @@ class Learner:
             df = pd.DataFrame(rs)
             return df
 
-    def save_checkpoint(self, epoch: int, valid_loss: float, valid_score: float):
-        fname = f"{self.cfg.checkpoint_dir}/{self.name}.pt"
+    def save_checkpoint(self, kind: str, epoch: int, valid_loss: float, valid_score: float):
+        fname = f"{self.cfg.checkpoint_dir}/{self.name}-{kind}.pt"
         torch.save({
             'epoch': epoch,
             'valid_loss': valid_loss,
@@ -151,9 +152,9 @@ class Learner:
             'optimizer_state_dict': self.optimizer.state_dict()
         }, fname)
 
-    def load_checkpoint(self, name: str = None):
+    def load_checkpoint(self, kind: str, name: str = None):
         if name is None:
-            fname = f"{self.cfg.checkpoint_dir}/{self.name}.pt"
+            fname = f"{self.cfg.checkpoint_dir}/{self.name}-{kind}.pt"
         else:
             fname = f"{self.cfg.checkpoint_dir}/{name}.pt"
         checkpoint = torch.load(fname)
