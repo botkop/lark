@@ -35,6 +35,7 @@ class Config:
 
     # logging
     use_neptune: bool = True
+    log_batch_metrics: bool = False
 
     # sig parameters
     sr: int = 32000
@@ -56,10 +57,6 @@ class Config:
     scheduler: str = 'torch.optim.lr_scheduler.CosineAnnealingLR'
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
 
-    # @property
-    # def scheduler_params(self):
-    #     return self.default_scheduler_params[self.scheduler]
-
     @property
     def scheduler_params(self):
         default_params = {
@@ -70,8 +67,11 @@ class Config:
             },
             'torch.optim.lr_scheduler.CosineAnnealingLR': {
                 "eta_min": 1e-5,
-                "T_max": self.n_epochs
-            }
+                "T_max": 15
+                # "T_max": self.n_epochs
+            },
+            'torch.optim.lr_scheduler.CosineAnnealingWarmRestarts': dict(
+                T_0=10, T_mult=2, eta_min=0.01, last_epoch=-1)
         }
         return default_params[self.scheduler]
 
@@ -97,6 +97,7 @@ class Config:
         d = dataclasses.asdict(self)
         d['labels'] = self.labels
         d['scheduler_params'] = self.scheduler_params
+        d['training_dataset_size'] = self.training_dataset_size
         return d
 
     @property

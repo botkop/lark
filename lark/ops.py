@@ -9,6 +9,9 @@ from lark.config import Config
 
 
 def f1(y_true: torch.Tensor, y_pred: torch.Tensor, thresh: float) -> Dict[str, float]:
+    # note f score calculated here is identical to:
+    # f = sklearn.metrics.f1_score(y_true.cpu().numpy(), (y_pred >= thresh).cpu().numpy(), average='micro')
+
     tp = (y_pred[torch.where(y_true == 1)] >= thresh).sum()
     tn = (y_pred[torch.where(y_true == 0)] < thresh).sum()
     fp = (y_pred[torch.where(y_true == 0)] >= thresh).sum()
@@ -69,6 +72,7 @@ class MixedSig2Spec(torch.nn.Module):
     def __init__(self, cfg: Config, forward_as_image: bool = False):
         super().__init__()
 
+        # based on https://arxiv.org/pdf/2007.11154.pdf
         window_lengths = [800, 1600, 3200]
         hop_lengths = [320, 800, 1600]
 

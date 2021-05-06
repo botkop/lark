@@ -1,5 +1,4 @@
 import glob
-import itertools
 import math
 import random
 
@@ -36,12 +35,9 @@ def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int) -> torch.T
 class ValidDataset(Dataset):
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        # self.site = cfg.site
-        # self.sss = glob.glob(f"{cfg.data_dir}/train_soundscapes.wav/*_{self.site}_*.wav")
-        # self.sss = glob.glob(f"{cfg.data_dir}/train_soundscapes.wav/*.wav")
         self.df_ss = pd.read_csv(f"{cfg.data_dir}/train_soundscape_labels.csv")
-        # self.df_ss = self.df_ss[self.df_ss['site'] == self.site].reset_index(drop=True)
-        # self.labels = [x for x in sorted(set(itertools.chain(*self.df_ss['birds'].str.split(' ')))) if x != 'nocall']
+        if cfg.sites is not None:
+            self.df_ss = self.df_ss[self.df_ss['site'].isin(cfg.sites)].reset_index(drop=True)
         self.labels = cfg.labels
         self.indices = {b: self.labels.index(b) for b in self.labels}
 

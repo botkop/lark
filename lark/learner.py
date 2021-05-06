@@ -75,7 +75,8 @@ class Learner:
                     ys.append(y)
 
                 pbar.set_description(f"{mode} loss: {loss:>8f}")
-                self.exp.log_metric(mode, 'batch', 'loss', loss)
+                if self.cfg.log_batch_metrics:
+                    self.exp.log_metric(mode, 'batch', 'loss', loss)
 
                 tl += loss.item()
                 if mode == 'train':
@@ -149,7 +150,8 @@ class Learner:
             'valid_loss': valid_loss,
             'valid_score': valid_score,
             'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict()
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict()
         }, fname)
 
     def load_checkpoint(self, kind: str, name: str = None):
