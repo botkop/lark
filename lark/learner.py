@@ -56,6 +56,7 @@ class Learner:
         self.optimizer = cfg.instantiate_optimizer(self.model.parameters())
         self.scheduler = cfg.instantiate_scheduler(self.optimizer)
         self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        print(self.name)
         self.exp = Experiment(cfg)
 
     def epoch_loop(self, dl, mode, f1_threshold):
@@ -162,6 +163,7 @@ class Learner:
         checkpoint = torch.load(fname)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         epoch = checkpoint['epoch']
         valid_loss = checkpoint['valid_loss']
         valid_score = checkpoint['valid_score']

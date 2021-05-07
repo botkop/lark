@@ -25,6 +25,15 @@ def f1(y_true: torch.Tensor, y_pred: torch.Tensor, thresh: float) -> Dict[str, f
     return d
 
 
+def normalize(spec: torch.Tensor) -> torch.Tensor:
+    spec -= spec.min()
+    if spec.max() != 0:
+        spec /= spec.max()
+    else:
+        spec = torch.clamp(spec, 0, 1)
+    return spec
+
+
 class Sig2Spec(torch.nn.Module):
     def __init__(self, cfg: Config, forward_as_image: bool = False):
         super().__init__()
@@ -43,15 +52,6 @@ class Sig2Spec(torch.nn.Module):
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
         self.forward_as_image = forward_as_image
 
-    @staticmethod
-    def normalize(spec: torch.Tensor) -> torch.Tensor:
-        spec -= spec.min()
-        if spec.max() != 0:
-            spec /= spec.max()
-        else:
-            spec = torch.clamp(spec, 0, 1)
-        return spec
-
     @classmethod
     def scale_minmax(cls, x, min=0.0, max=1.0):
         x_std = (x - x.min()) / (x.max() - x.min())
@@ -61,7 +61,7 @@ class Sig2Spec(torch.nn.Module):
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         spec = self.melspec(sig)
         spec = self.p2db(spec)
-        spec = self.normalize(spec)
+        spec = normalize(spec)
         if self.forward_as_image:
             # change channel axis from 1 to 3 (rgb)
             spec = torch.cat([spec.transpose(0, 1)]*3).transpose(0, 1)
@@ -95,15 +95,6 @@ class MixedSig2Spec(torch.nn.Module):
         # self.tf_resize = torchvision.transforms.Resize((224, 224))
         self.tf_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-    @staticmethod
-    def normalize(spec: torch.Tensor) -> torch.Tensor:
-        spec -= spec.min()
-        if spec.max() != 0:
-            spec /= spec.max()
-        else:
-            spec = torch.clamp(spec, 0, 1)
-        return spec
-
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         # note: assuming batch input
         with torch.no_grad():
@@ -111,7 +102,7 @@ class MixedSig2Spec(torch.nn.Module):
             spec = torch.cat([x.transpose(0, 1) for x in imgs]).transpose(0, 1)
             # note: tf_norm(spec) == tf_norm(normalize(spec))
             if self.forward_as_image:
-                spec = self.normalize(spec)
+                spec = normalize(spec)
             else:
                 spec = self.tf_norm(spec)
             return spec

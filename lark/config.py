@@ -17,7 +17,8 @@ class Config:
     checkpoint_dir: str = 'checkpoints'
     bs: int = 32
     n_workers: int = 12
-    duration: float = 5
+    train_duration: float = 5
+    valid_duration: float = 5
 
     # augmentation
     use_noise: bool = True
@@ -39,7 +40,7 @@ class Config:
 
     # sig parameters
     sr: int = 32000
-    n_frames: int = duration * sr
+    # n_frames: int = duration * sr
     n_fft: int = 512
     window_length: int = n_fft
     n_mels: int = 64
@@ -67,7 +68,7 @@ class Config:
             },
             'torch.optim.lr_scheduler.CosineAnnealingLR': {
                 "eta_min": 1e-5,
-                "T_max": 15
+                "T_max": 10
                 # "T_max": self.n_epochs
             },
             'torch.optim.lr_scheduler.CosineAnnealingWarmRestarts': dict(
@@ -91,7 +92,7 @@ class Config:
 
     @property
     def training_dataset_size(self):
-        return self.bs * self.n_workers * self.n_labels
+        return self.bs * self.n_workers * self.n_labels * 2
 
     def as_dict(self):
         d = dataclasses.asdict(self)
