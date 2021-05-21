@@ -51,6 +51,7 @@ class Sig2Spec(torch.nn.Module):
         )
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
         self.forward_as_image = forward_as_image
+        self.tf_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     @classmethod
     def scale_minmax(cls, x, min=0.0, max=1.0):
@@ -59,12 +60,14 @@ class Sig2Spec(torch.nn.Module):
         return x_scaled
 
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        spec = self.melspec(sig)
-        spec = self.p2db(spec)
-        spec = normalize(spec)
-        if self.forward_as_image:
-            # change channel axis from 1 to 3 (rgb)
+        with torch.no_grad():
+            spec = self.melspec(sig)
+            spec = self.p2db(spec)
             spec = torch.cat([spec.transpose(0, 1)]*3).transpose(0, 1)
+            if self.forward_as_image:
+                spec = normalize(spec)
+            else:
+                spec = self.tf_norm(spec)
         return spec
 
 
@@ -91,8 +94,8 @@ class MixedSig2Spec(torch.nn.Module):
 
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
         self.forward_as_image = forward_as_image
-        self.tf_resize = torchvision.transforms.Resize((128, 250))
-        # self.tf_resize = torchvision.transforms.Resize((224, 224))
+        # self.tf_resize = torchvision.transforms.Resize((128, 250))
+        self.tf_resize = torchvision.transforms.Resize((224, 224))
         self.tf_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:

@@ -20,9 +20,14 @@ class Config:
     train_duration: float = 5
     valid_duration: float = 5
 
+    seed: int = 231
+
     # augmentation
-    use_noise: bool = True
+    use_pink_noise: float = 0.5
+    use_recorded_noise: float = 0.5
+    use_secondary_labels: bool = False
     noise_nsr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
+    pink_noise_nsr_dbs: List[int] = dataclasses.field(default_factory=lambda: [10, 5, 3])
     noise_dir: str = 'data/noise/BirdVox-DCASE-20k/wav-32k'
     use_overlays: bool = True
     max_overlays: int = 5
@@ -33,6 +38,7 @@ class Config:
         0.00574053,
         0.00114811])
     overlay_snr_dbs: List[int] = dataclasses.field(default_factory=lambda: [20, 10, 3])
+    apply_filter: float = 0.6
 
     # logging
     use_neptune: bool = True
@@ -40,13 +46,17 @@ class Config:
 
     # sig parameters
     sr: int = 32000
-    # n_frames: int = duration * sr
+
     n_fft: int = 512
     window_length: int = n_fft
+
     n_mels: int = 64
+
     hop_length: int = 312
+
     f_min: int = 150
     f_max: int = 15000
+    f1_threshold: float = 0.5
 
     # learner parameters
     lr: float = 1e-3
@@ -59,11 +69,20 @@ class Config:
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
 
     @property
+    def schedule_per_epoch(self) -> bool:
+        d = {
+            'torch.optim.lr_scheduler.CosineAnnealingLR': True,
+            'torch.optim.lr_scheduler.OneCycleLR': False,
+            'torch.optim.lr_scheduler.CosineAnnealingWarmRestarts': False
+        }
+        return d[self.scheduler]
+
+    @property
     def scheduler_params(self):
         default_params = {
             "torch.optim.lr_scheduler.OneCycleLR": {
                 "max_lr": self.lr * 10,
-                "steps_per_epoch": self.training_dataset_size // self.bs,
+                "steps_per_epoch": (self.training_dataset_size // self.bs) + self.training_dataset_size % self.bs,
                 "epochs": self.n_epochs
             },
             'torch.optim.lr_scheduler.CosineAnnealingLR': {
@@ -92,7 +111,7 @@ class Config:
 
     @property
     def training_dataset_size(self):
-        return self.bs * self.n_workers * self.n_labels * 2
+        return self.n_labels * 100
 
     def as_dict(self):
         d = dataclasses.asdict(self)

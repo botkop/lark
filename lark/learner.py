@@ -25,11 +25,11 @@ class Experiment:
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False
 
-    def init(self, name: str, seed: int = 42):
-        self.set_seed(seed)
+    def init(self, name: str):
+        self.set_seed(self.cfg.seed)
         if self.cfg.use_neptune:
             neptune.init(project_qualified_name='botkop/lark')
             neptune.create_experiment(name, params=self.cfg.as_dict())
@@ -59,14 +59,14 @@ class Learner:
         print(self.name)
         self.exp = Experiment(cfg)
 
-    def epoch_loop(self, dl, mode, f1_threshold):
+    def epoch_loop(self, dl, mode):
         from lark.ops import f1
         tl = 0
         ps = []
         ys = []
         n_batches = len(dl)
-        with tqdm(dl, leave=False) as pbar:
-            for x, y in pbar:
+        with tqdm(dl, leave=False) as epoch_bar:
+            for x, y in epoch_bar:
                 x = x.cuda()
                 y = y.cuda()
                 pred = self.model(x)
@@ -75,7 +75,7 @@ class Learner:
                     ps.append(pred.sigmoid())
                     ys.append(y)
 
-                pbar.set_description(f"{mode} loss: {loss:>8f}")
+                epoch_bar.set_description(f"{mode} loss: {loss:>8f}")
                 if self.cfg.log_batch_metrics:
                     self.exp.log_metric(mode, 'batch', 'loss', loss)
 
@@ -84,20 +84,23 @@ class Learner:
                     self.optimizer.zero_grad()
                     loss.backward()
                     self.optimizer.step()
-                    self.scheduler.step()
+                    if not self.cfg.schedule_per_epoch:
+                        self.scheduler.step()
 
-            ts = f1(torch.cat(ys), torch.cat(ps), f1_threshold)['f1']
-            tl /= n_batches
-            return tl, ts
+        if mode == 'train' and self.cfg.schedule_per_epoch:
+            self.scheduler.step()
+        ts = f1(torch.cat(ys), torch.cat(ps), self.cfg.f1_threshold)['f1']
+        tl /= n_batches
+        return tl, ts
 
-    def tv_loop(self, dl, mode, f1_threshold=0.5):
+    def tv_loop(self, dl, mode):
         if mode == 'train':
             self.model.train()
-            epoch_loss, epoch_score = self.epoch_loop(dl, mode, f1_threshold)
+            epoch_loss, epoch_score = self.epoch_loop(dl, mode)
         else:
             self.model.eval()
             with torch.no_grad():
-                epoch_loss, epoch_score = self.epoch_loop(dl, mode, f1_threshold)
+                epoch_loss, epoch_score = self.epoch_loop(dl, mode)
         return epoch_loss, epoch_score
 
     def learn(self):
