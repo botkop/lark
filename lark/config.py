@@ -16,6 +16,7 @@ class Config:
     data_dir: str = 'data/birdclef-2021'
     checkpoint_dir: str = 'checkpoints'
     bs: int = 32
+    n_samples_per_label: int = 1000
     n_workers: int = 12
     train_duration: float = 5
     valid_duration: float = 5
@@ -88,7 +89,6 @@ class Config:
             'torch.optim.lr_scheduler.CosineAnnealingLR': {
                 "eta_min": 1e-5,
                 "T_max": 10
-                # "T_max": self.n_epochs
             },
             'torch.optim.lr_scheduler.CosineAnnealingWarmRestarts': dict(
                 T_0=10, T_mult=2, eta_min=0.01, last_epoch=-1)
@@ -111,7 +111,7 @@ class Config:
 
     @property
     def training_dataset_size(self):
-        return self.n_labels * 100
+        return self.n_labels * self.n_samples_per_label
 
     def as_dict(self):
         d = dataclasses.asdict(self)
@@ -129,6 +129,7 @@ class Config:
     @property
     def instantiate_loss(self):
         import torch  # type: ignore
+        import lark  # type: ignore
         from lark.pann import PANNsLoss  # type: ignore
         return eval(self.loss_fn)
 

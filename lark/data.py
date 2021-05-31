@@ -148,11 +148,12 @@ class TrainDataset(Dataset):
 
     def assemble_sig(self):
         ops_list = []
-        label = torch.zeros(len(self.labels)) + 0.0025  # Label smoothing
+        # label = torch.zeros(len(self.labels)) + 0.0025  # Label smoothing
+        label = torch.zeros(len(self.labels))
         base_sig, birds = self.read_sig(ops_list)
         for b in birds:
-            label[b] = 0.995
-            # label[b] = 1.0
+            label[b] = 1.0
+            # label[b] = 0.995
         if self.cfg.use_overlays:
             n_overlays = random.choices(range(self.cfg.max_overlays), weights=self.cfg.overlay_weights)[0]
             for _ in range(n_overlays):
