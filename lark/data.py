@@ -39,30 +39,36 @@ def merge_sigs(sig_a: torch.Tensor, sig_b: torch.Tensor, snr_db: int, ops_list: 
 class ValidDataset(Dataset):
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.df_ss = pd.read_csv(f"{cfg.data_dir}/train_soundscape_labels.csv")
-        if cfg.sites is not None:
-            self.df_ss = self.df_ss[self.df_ss['site'].isin(cfg.sites)].reset_index(drop=True)
         self.labels = cfg.labels
         self.indices = {b: self.labels.index(b) for b in self.labels}
         self.n_frames = self.cfg.valid_duration * self.cfg.sr
 
-    def __len__(self):
-        return len(self.df_ss)
+        df_ss = pd.read_csv(f"{cfg.data_dir}/train_soundscape_labels.csv")
+        if cfg.sites is not None:
+            df_ss = df_ss[df_ss['site'].isin(cfg.sites)].reset_index(drop=True)
+        self.length = len(df_ss)
+        self.encoded_labels = torch.from_numpy(np.stack(df_ss.apply(self.make_label, axis=1).values))
+        self.signals = torch.from_numpy(np.stack(df_ss.apply(self.read_sig, axis=1).values))
 
-    def __getitem__(self, idx):
-        row = self.df_ss.iloc[idx]
+    def read_sig(self, row):
         fname = glob.glob(f"{self.cfg.data_dir}/train_soundscapes.wav/{row.audio_id}_{row.site}_*.wav")[0]
-        sig, _ = ta.load(filepath=fname,
-                         frame_offset=self.cfg.sr * (row.seconds - self.cfg.valid_duration),
-                         num_frames=self.n_frames)
+        offset = self.cfg.sr * (row.seconds - self.cfg.valid_duration)
+        sig = ta.load(filepath=fname, frame_offset=offset, num_frames=self.n_frames)[0].numpy()
+        return sig
 
-        label = torch.zeros(len(self.labels))
+    def make_label(self, row):
+        label = np.zeros(len(self.labels))
         if row.birds != 'nocall':
             birds = row.birds.split(' ')
-            indices = [self.indices[b] for b in birds]
-            label[indices] = 1.0
+            ixs = [self.indices[b] for b in birds]
+            label[ixs] = 1.0
+        return label
 
-        return sig, label
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        return self.signals[idx], self.encoded_labels[idx]
 
     @property
     def loader(self):
@@ -161,8 +167,8 @@ class TrainDataset(Dataset):
                 snr = random.choice(self.cfg.overlay_snr_dbs)
                 base_sig = merge_sigs(base_sig, sig, snr, ops_list)
                 for b in bs:
-                    label[b] = 0.995
-                    # label[b] = 1.0
+                    # label[b] = 0.995
+                    label[b] = 1.0
         if self.cfg.use_recorded_noise > random.random():
             nsr = random.choice(self.cfg.noise_nsr_dbs)
             noise = read_random_sig(self.cfg.noise_dir, self.n_frames)

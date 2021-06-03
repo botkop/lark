@@ -1,4 +1,3 @@
-import gc
 import os
 import random
 from datetime import datetime
@@ -7,57 +6,59 @@ import neptune
 import numpy as np
 import pandas as pd
 import torch
-from tqdm.notebook import tqdm
+# from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 from lark.config import Config
 from lark.data import ValidDataset, TrainDataset
 
 
 class Experiment:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, rank: int):
         self.cfg = cfg
+        self.rank = rank
+        self.use_neptune = cfg.use_neptune and rank == 0
 
-    @staticmethod
-    def set_seed(seed: int):
-        random.seed(seed)
-        os.environ["PYTHONHASHSEED"] = str(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+    def set_seed(self):
+        random.seed(self.cfg.seed)
+        np.random.seed(self.cfg.seed)
+        os.environ["PYTHONHASHSEED"] = str(self.cfg.seed)
+        torch.manual_seed(self.cfg.seed)
+        torch.cuda.manual_seed_all(self.cfg.seed)
         # torch.backends.cudnn.deterministic = True
         # torch.backends.cudnn.benchmark = False
 
     def init(self, name: str):
-        self.set_seed(self.cfg.seed)
-        if self.cfg.use_neptune:
+        self.set_seed()
+        if self.use_neptune:
             neptune.init(project_qualified_name='botkop/lark')
-            neptune.create_experiment(name, params=self.cfg.as_dict())
+            neptune.create_experiment(name, params=self.cfg.as_dict(), upload_stderr=False)
 
     def log_metric(self, mode: str = 'train', event: str = 'batch', name: str = 'loss', value: float = 0.0):
-        if self.cfg.use_neptune:
+        if self.use_neptune:
             neptune.log_metric(f'{mode}_{event}_{name}', value)
 
     def finish(self):
-        if self.cfg.use_neptune:
+        if self.use_neptune:
             neptune.stop()
 
 
 class Learner:
-    def __init__(self, exp_name: str, cfg: Config, model: torch.nn.Module = None):
+    def __init__(self, exp_name: str, cfg: Config, rank: int, model: torch.nn.Module = None):
+        self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        print(f"{self.name}:{rank}")
         self.cfg = cfg
         self.vdl = ValidDataset(cfg).loader
         self.tdl = TrainDataset(cfg).loader
-        self.loss_fn = cfg.instantiate_loss().cuda()
+        self.loss_fn = cfg.instantiate_loss()
         if model:
             self.model = model
         else:
-            self.model = cfg.instantiate_model().load(cfg).cuda()
+            self.model = cfg.instantiate_model().load(cfg).to(rank)
         self.optimizer = cfg.instantiate_optimizer(self.model.parameters())
         self.scheduler = cfg.instantiate_scheduler(self.optimizer)
-        self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        print(self.name)
-        self.exp = Experiment(cfg)
+        self.exp = Experiment(cfg, rank)
+        self.rank = rank
 
     def epoch_loop(self, dl, mode):
         from lark.ops import f1
@@ -65,19 +66,15 @@ class Learner:
         ps = []
         ys = []
         n_batches = len(dl)
-        with tqdm(dl, leave=False) as epoch_bar:
+        with tqdm(dl, desc=f"{self.rank}:{mode}", leave=False, ascii=None, position=self.rank+2) as epoch_bar:
             for x, y in epoch_bar:
-                x = x.cuda()
-                y = y.cuda()
+                y = y.to(self.rank)
                 pred = self.model(x)
                 loss = self.loss_fn(pred, y)
                 with torch.no_grad():
                     ps.append(pred.sigmoid())
                     ys.append(y)
-
-                epoch_bar.set_description(f"{mode} loss: {loss:>8f}")
-                if self.cfg.log_batch_metrics:
-                    self.exp.log_metric(mode, 'batch', 'loss', loss)
+                epoch_bar.set_description(f"{self.rank}:{mode} loss: {loss:>8f}")
 
                 tl += loss.item()
                 if mode == 'train':
@@ -104,28 +101,29 @@ class Learner:
         return epoch_loss, epoch_score
 
     def learn(self):
-        gc.collect()
-        torch.cuda.empty_cache()
-
+        # gc.collect()
+        # torch.cuda.empty_cache()
         self.exp.init(self.name)
         last_valid_loss = np.inf
-        with tqdm(range(self.cfg.n_epochs)) as pbar:
+        with tqdm(range(self.cfg.n_epochs), desc="epochs", leave=False, ascii=None, position=0) as pbar:
             for epoch in pbar:
                 train_loss, train_score = self.tv_loop(self.tdl, 'train')
                 valid_loss, valid_score = self.tv_loop(self.vdl, 'valid')
-                msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} " \
-                      f"epoch: {epoch + 1:3d} " \
-                      f"train loss: {train_loss:>8f} train f1: {train_score:>8f} " \
-                      f"valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
-                print(msg)
-                self.exp.log_metric('train', 'epoch', 'loss', train_loss)
-                self.exp.log_metric('valid', 'epoch', 'loss', valid_loss)
-                self.exp.log_metric('train', 'epoch', 'f1', train_score)
-                self.exp.log_metric('valid', 'epoch', 'f1', valid_score)
-                if valid_loss <= last_valid_loss:
-                    self.save_checkpoint('best', epoch, valid_loss, valid_score)
-                    last_valid_loss = valid_loss
-                self.save_checkpoint('latest', epoch, valid_loss, valid_score)
+                if self.rank == 0:
+                    msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} " \
+                          f"epoch: {epoch + 1:3d} " \
+                          f"train loss: {train_loss:>8f} train f1: {train_score:>8f} " \
+                          f"valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
+                    pbar.write(msg)
+                    self.exp.log_metric('train', 'epoch', 'loss', train_loss)
+                    self.exp.log_metric('valid', 'epoch', 'loss', valid_loss)
+                    self.exp.log_metric('train', 'epoch', 'f1', train_score)
+                    self.exp.log_metric('valid', 'epoch', 'f1', valid_score)
+                    if valid_loss <= last_valid_loss:
+                        self.save_checkpoint('best', epoch, valid_loss, valid_score)
+                        last_valid_loss = valid_loss
+                    self.save_checkpoint('latest', epoch, valid_loss, valid_score)
+
         self.exp.finish()
 
     def evaluate(self):

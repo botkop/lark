@@ -76,7 +76,7 @@ class Sig2Spec(torch.nn.Module):
 
 
 class MixedSig2Spec(torch.nn.Module):
-    def __init__(self, cfg: Config, forward_as_image: bool = False):
+    def __init__(self, cfg: Config, rank, forward_as_image: bool = False):
         super().__init__()
 
         # based on https://arxiv.org/pdf/2007.11154.pdf
@@ -94,7 +94,7 @@ class MixedSig2Spec(torch.nn.Module):
             n_mels=128,
             power=2.0,
             normalized=False,
-        ).cuda() for i in range(3)]
+        ).to(rank) for i in range(3)]
 
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
         self.forward_as_image = forward_as_image
