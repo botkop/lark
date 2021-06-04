@@ -126,24 +126,28 @@ class Learner:
 
         self.exp.finish()
 
-    def evaluate(self):
-        from lark.ops import f1
+    def validation_inference(self):
         self.model.eval()
         with torch.no_grad():
             ps = []
             ys = []
             for x, y in tqdm(self.vdl):
-                x = x.cuda()
-                y = y.cuda()
+                x = x.to(self.rank)
+                y = y.to(self.rank)
                 pred = self.model(x).sigmoid()
                 ps.append(pred)
                 ys.append(y)
             ps = torch.cat(ps)
             ys = torch.cat(ys)
-            ts = np.arange(0.0, 1.1, 0.1)
-            rs = [f1(ys, ps, t) for t in ts]
-            df = pd.DataFrame(rs)
-            return df
+        return ps, ys
+
+    def evaluate(self):
+        from lark.ops import f1
+        ps, ys = self.validation_inference()
+        ts = np.arange(0.0, 1.1, 0.1)
+        rs = [f1(ys, ps, t) for t in ts]
+        df = pd.DataFrame(rs)
+        return df
 
     def save_checkpoint(self, kind: str, epoch: int, valid_loss: float, valid_score: float):
         fname = f"{self.cfg.checkpoint_dir}/{self.name}-{kind}.pt"
