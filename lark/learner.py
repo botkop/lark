@@ -48,8 +48,8 @@ class Learner:
         self.name = f"{exp_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         print(f"{self.name}:{rank}")
         self.cfg = cfg
-        self.vdl = ValidDataset(cfg).loader
-        self.tdl = TrainDataset(cfg).loader
+        self._vdl = None
+        self._tdl = None
         self.loss_fn = cfg.instantiate_loss()
         if model:
             self.model = model
@@ -57,8 +57,22 @@ class Learner:
             self.model = cfg.instantiate_model().load(cfg).to(rank)
         self.optimizer = cfg.instantiate_optimizer(self.model.parameters())
         self.scheduler = cfg.instantiate_scheduler(self.optimizer)
+        self.schedule_per_epoch = cfg.schedule_per_epoch
+        self.schedule_per_batch = not cfg.schedule_per_epoch
         self.exp = Experiment(cfg, rank)
         self.rank = rank
+
+    @property
+    def vdl(self):
+        if self._vdl is None:
+            self._vdl = ValidDataset(self.cfg).loader
+        return self._vdl
+
+    @property
+    def tdl(self):
+        if self._tdl is None:
+            self._tdl = TrainDataset(self.cfg).loader
+        return self._tdl
 
     def epoch_loop(self, dl, mode):
         from lark.ops import f1
@@ -81,10 +95,10 @@ class Learner:
                     self.optimizer.zero_grad()
                     loss.backward()
                     self.optimizer.step()
-                    if not self.cfg.schedule_per_epoch:
+                    if self.schedule_per_batch:
                         self.scheduler.step()
 
-        if mode == 'train' and self.cfg.schedule_per_epoch:
+        if mode == 'train' and self.schedule_per_epoch:
             self.scheduler.step()
         ts = f1(torch.cat(ys), torch.cat(ps), self.cfg.f1_threshold)['f1']
         tl /= n_batches
@@ -165,7 +179,7 @@ class Learner:
             fname = f"{self.cfg.checkpoint_dir}/{self.name}-{kind}.pt"
         else:
             fname = f"{self.cfg.checkpoint_dir}/{name}.pt"
-        checkpoint = torch.load(fname)
+        checkpoint = torch.load(fname, map_location=torch.device(self.rank))
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])

@@ -1,23 +1,23 @@
 import numpy as np
+import pandas as pd
+import torch
 from sklearn import metrics
 
 from lark.config import Config
-from lark.data import TrainDataset
 
 
-class PostProcessing:
-    def __init__(self, cfg: Config, tds: TrainDataset):
-        self.cfg = cfg
-        self.tds = tds
-        self.df_meta = tds.df_meta[tds.df_meta.primary_label.isin(self.labels)]
-        self.labels = tds.labels
-        self.indices = tds.indices
+class CoOccurrence:
+    def __init__(self, sites):
+        self.cfg = Config(sites=sites)
+        self.labels = self.cfg.labels
+        self.indices = {b: self.labels.index(b) for b in self.labels}
+        self.df_meta = pd.read_csv(f"{self.cfg.data_dir}/train_metadata.csv")
+        self.df_meta = self.df_meta[self.df_meta.primary_label.isin(self.labels)]
+        self.df_meta['secondary_labels'] = self.df_meta['secondary_labels'].str.replace("[\[\]',]", '',
+                                                                                        regex=True).str.split()
+        self.matrix = self.compute_matrix()
 
-        self.occur = self.co_occurrence
-        self.chunk_size = 120
-
-    @property
-    def co_occurrence(self):
+    def compute_matrix(self):
         occur = np.zeros((self.cfg.n_labels, self.cfg.n_labels), dtype='int')
         for primary, secondary in zip(self.df_meta.primary_label, self.df_meta.secondary_labels):
             for label in secondary:
@@ -26,19 +26,32 @@ class PostProcessing:
                     occur[self.indices[label], self.indices[primary]] = 1
         return occur
 
-    def get_chunk_thresholds(self, chunk_nr, ps, thr_dict):
-        fr = chunk_nr * self.chunk_size
-        to = (chunk_nr + 1) * self.chunk_size
-        psc = ps[fr:to]
+    def save(self, fname: str):
+        np.save(fname, self.matrix)
+
+
+class PostProcessing:
+    def __init__(self, occur: np.ndarray):
+        self.occur = occur
+        self.chunk_size = 120
+
+    @staticmethod
+    def get_thresholds(psc: torch.Tensor, thr_dict: dict, occur: np.ndarray):
         thresholds = np.ones_like(psc) * thr_dict['median']
         is_confident = np.sum(psc > thr_dict['high'], axis=0).astype(bool)
+        thresholds[:, np.where(occur[is_confident])[0]] = thr_dict['corr']
         thresholds[:, is_confident] = thr_dict['low']
-        thresholds[:, np.where(self.occur[is_confident])[0]] = thr_dict['corr']
         return thresholds
 
-    def get_thresholds(self, ps, thr_dict):
+    def get_chunk(self, ps, i):
+        fr = i * self.chunk_size
+        to = (i + 1) * self.chunk_size
+        return ps[fr:to]
+
+    def get_chunked_thresholds(self, ps, thr_dict):
         n_chunks = ps.shape[0] // self.chunk_size
-        return np.concatenate([self.get_chunk_thresholds(i, ps, thr_dict) for i in range(n_chunks)])
+        return np.concatenate([self.get_thresholds(self.get_chunk(ps, i), thr_dict, self.occur)
+                               for i in range(n_chunks)])
 
     @staticmethod
     def compute_f1(ps, ys, ts, combined: bool = True):
@@ -49,21 +62,26 @@ class PostProcessing:
         return f1s
 
     def get_global_f1(self, ps, ys, td, combined=True):
-        ts = self.get_thresholds(ps, td)
+        ts = self.get_chunked_thresholds(ps, td)
         return self.compute_f1(ps, ys, ts, combined)
 
-    def get_individual_f1(self, ps, ys, ts):
+    def get_individual_f1(self, ps, ys, td):
         n_chunks = ps.shape[0] // self.chunk_size
         scores = []
         for i in range(n_chunks):
             fr = i * self.chunk_size
             to = (i + 1) * self.chunk_size
-            ts = self.get_chunk_thresholds(i, ps, ts)
-            f1s = metrics.f1_score(ys[fr:to], ps[fr:to] >= ts, average='micro', zero_division=1)
+            psc = ps[fr:to]
+            ts = self.get_thresholds(psc, ps, td)
+            f1s = metrics.f1_score(ys[fr:to], psc >= ts, average='micro', zero_division=1)
             scores.append(f1s)
         return scores
 
     def scan_thr_pars(self, ps, ys):
+        if isinstance(ps, torch.Tensor):
+            ps = ps.cpu().numpy()
+        if isinstance(ys, torch.Tensor):
+            ys = ys.cpu().numpy()
         max_f1 = -1
         max_td = {}
         step = 0.1
@@ -77,8 +95,3 @@ class PostProcessing:
                             max_f1 = fs
                             max_td = td
         return max_f1, max_td
-
-
-
-
-
