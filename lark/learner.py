@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from lark.config import Config
 from lark.data import ValidDataset, TrainDataset
+from lark.post import PostProcessing
 
 
 class Experiment:
@@ -61,6 +62,7 @@ class Learner:
         self.schedule_per_batch = not cfg.schedule_per_epoch
         self.exp = Experiment(cfg, rank)
         self.rank = rank
+        self.popr = PostProcessing(cfg)
 
     @property
     def vdl(self):
@@ -102,41 +104,47 @@ class Learner:
             self.scheduler.step()
         ts = f1(torch.cat(ys), torch.cat(ps), self.cfg.f1_threshold)['f1']
         tl /= n_batches
-        return tl, ts
+        xf1 = self.popr.get_f1(torch.cat(ps), torch.cat(ys), self.cfg.thr_dict)
+        return tl, ts, xf1
 
     def tv_loop(self, dl, mode):
         if mode == 'train':
             self.model.train()
-            epoch_loss, epoch_score = self.epoch_loop(dl, mode)
+            epoch_loss, epoch_score, epoch_x_score = self.epoch_loop(dl, mode)
         else:
             self.model.eval()
             with torch.no_grad():
-                epoch_loss, epoch_score = self.epoch_loop(dl, mode)
-        return epoch_loss, epoch_score
+                epoch_loss, epoch_score, epoch_x_score = self.epoch_loop(dl, mode)
+        return epoch_loss, epoch_score, epoch_x_score
 
     def learn(self):
         # gc.collect()
         # torch.cuda.empty_cache()
         self.exp.init(self.name)
         last_valid_loss = np.inf
+        last_valid_x_score = -1
         with tqdm(range(self.cfg.n_epochs), desc="epochs", leave=False, ascii=None, position=0) as pbar:
             for epoch in pbar:
-                train_loss, train_score = self.tv_loop(self.tdl, 'train')
-                valid_loss, valid_score = self.tv_loop(self.vdl, 'valid')
+                train_loss, train_score, _ = self.tv_loop(self.tdl, 'train')
+                valid_loss, valid_score, valid_x_score = self.tv_loop(self.vdl, 'valid')
                 if self.rank == 0:
                     msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} " \
                           f"epoch: {epoch + 1:3d} " \
                           f"train loss: {train_loss:>8f} train f1: {train_score:>8f} " \
-                          f"valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f}"
+                          f"valid loss: {valid_loss:>8f} valid f1: {valid_score:>8f} valid xf1: {valid_x_score:>8f}"
                     pbar.write(msg)
                     self.exp.log_metric('train', 'epoch', 'loss', train_loss)
                     self.exp.log_metric('valid', 'epoch', 'loss', valid_loss)
                     self.exp.log_metric('train', 'epoch', 'f1', train_score)
                     self.exp.log_metric('valid', 'epoch', 'f1', valid_score)
+                    self.exp.log_metric('valid', 'epoch', 'xf1', valid_x_score)
                     if valid_loss <= last_valid_loss:
-                        self.save_checkpoint('best', epoch, valid_loss, valid_score)
+                        self.save_checkpoint('best_loss', epoch, valid_loss, valid_score, valid_x_score)
                         last_valid_loss = valid_loss
-                    self.save_checkpoint('latest', epoch, valid_loss, valid_score)
+                    if valid_x_score >= last_valid_x_score:
+                        self.save_checkpoint('best_score', epoch, valid_loss, valid_score, valid_x_score)
+                        last_valid_x_score = valid_x_score
+                    self.save_checkpoint('latest', epoch, valid_loss, valid_score, valid_x_score)
 
         self.exp.finish()
 
@@ -163,12 +171,13 @@ class Learner:
         df = pd.DataFrame(rs)
         return df
 
-    def save_checkpoint(self, kind: str, epoch: int, valid_loss: float, valid_score: float):
+    def save_checkpoint(self, kind: str, epoch: int, valid_loss: float, valid_score: float, valid_x_score: float):
         fname = f"{self.cfg.checkpoint_dir}/{self.name}-{kind}.pt"
         torch.save({
             'epoch': epoch,
             'valid_loss': valid_loss,
             'valid_score': valid_score,
+            'valid_x_score': valid_x_score,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict()

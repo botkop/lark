@@ -31,17 +31,33 @@ class CoOccurrence:
 
 
 class PostProcessing:
-    def __init__(self, occur: np.ndarray):
-        self.occur = occur
+    def __init__(self, cfg: Config):
+        self.occur = CoOccurrence(sites=cfg.sites).matrix
         self.chunk_size = 120
 
     @staticmethod
-    def get_thresholds(psc: torch.Tensor, thr_dict: dict, occur: np.ndarray):
+    def get_thresholds(psc: np.ndarray, thr_dict: dict, occur: np.ndarray):
         thresholds = np.ones_like(psc) * thr_dict['median']
         is_confident = np.sum(psc > thr_dict['high'], axis=0).astype(bool)
         thresholds[:, np.where(occur[is_confident])[0]] = thr_dict['corr']
         thresholds[:, is_confident] = thr_dict['low']
         return thresholds
+
+    @staticmethod
+    def compute_f1(ps, ys, ts, combined: bool = True):
+        f1s = metrics.f1_score(ys, ps >= ts, average='micro', zero_division=1)
+        if combined:
+            no_call_f1s = metrics.f1_score(np.abs(ys - 1), ps < ts, average='micro', zero_division=1)
+            f1s = no_call_f1s * 0.54 + f1s * 0.46
+        return f1s
+
+    def get_f1(self, ps, ys, td, combined: bool = True):
+        if isinstance(ps, torch.Tensor):
+            ps = ps.cpu().numpy()
+        if isinstance(ys, torch.Tensor):
+            ys = ys.cpu().numpy()
+        ts = self.get_thresholds(ps, td, self.occur)
+        return self.compute_f1(ps, ys, ts, combined)
 
     def get_chunk(self, ps, i):
         fr = i * self.chunk_size
@@ -53,27 +69,27 @@ class PostProcessing:
         return np.concatenate([self.get_thresholds(self.get_chunk(ps, i), thr_dict, self.occur)
                                for i in range(n_chunks)])
 
-    @staticmethod
-    def compute_f1(ps, ys, ts, combined: bool = True):
-        f1s = metrics.f1_score(ys, ps >= ts, average='micro', zero_division=1)
-        if combined:
-            no_call_f1s = metrics.f1_score(np.abs(ys - 1), ps < ts, average='micro', zero_division=1)
-            f1s = no_call_f1s * 0.54 + f1s * 0.46
-        return f1s
-
     def get_global_f1(self, ps, ys, td, combined=True):
+        if isinstance(ps, torch.Tensor):
+            ps = ps.cpu().numpy()
+        if isinstance(ys, torch.Tensor):
+            ys = ys.cpu().numpy()
         ts = self.get_chunked_thresholds(ps, td)
         return self.compute_f1(ps, ys, ts, combined)
 
-    def get_individual_f1(self, ps, ys, td):
+    def get_individual_f1(self, ps, ys, td, combined=True):
+        if isinstance(ps, torch.Tensor):
+            ps = ps.cpu().numpy()
+        if isinstance(ys, torch.Tensor):
+            ys = ys.cpu().numpy()
         n_chunks = ps.shape[0] // self.chunk_size
         scores = []
         for i in range(n_chunks):
             fr = i * self.chunk_size
             to = (i + 1) * self.chunk_size
             psc = ps[fr:to]
-            ts = self.get_thresholds(psc, ps, td)
-            f1s = metrics.f1_score(ys[fr:to], psc >= ts, average='micro', zero_division=1)
+            ts = self.get_thresholds(psc, td, self.occur)
+            f1s = self.compute_f1(psc, ys[fr:to], ts, combined)
             scores.append(f1s)
         return scores
 
@@ -95,3 +111,11 @@ class PostProcessing:
                             max_f1 = fs
                             max_td = td
         return max_f1, max_td
+
+    def evaluate_learner(self, lrn, checkpoint: str, thr_dict: dict = None):
+        lrn.load_checkpoint("", checkpoint)
+        ps, ys = lrn.validation_inference()
+        if thr_dict is None:
+            return self.scan_thr_pars(ps, ys)
+        else:
+            return self.get_global_f1(ps, ys, thr_dict), thr_dict

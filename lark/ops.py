@@ -76,7 +76,7 @@ class Sig2Spec(torch.nn.Module):
 
 
 class MixedSig2Spec(torch.nn.Module):
-    def __init__(self, cfg: Config, rank, forward_as_image: bool = False):
+    def __init__(self, cfg: Config, rank: int, forward_as_image: bool = False):
         super().__init__()
 
         # based on https://arxiv.org/pdf/2007.11154.pdf
@@ -99,7 +99,8 @@ class MixedSig2Spec(torch.nn.Module):
         self.p2db = tat.AmplitudeToDB(stype='power', top_db=80)
         self.forward_as_image = forward_as_image
         # self.tf_resize = torchvision.transforms.Resize((128, 250))
-        self.tf_resize = torchvision.transforms.Resize((224, 224))
+        # self.tf_resize = torchvision.transforms.Resize((224, 224))
+        self.tf_resize = torchvision.transforms.Resize((256, 576))
         self.tf_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     def forward(self, sig: torch.Tensor, *args, **kwargs) -> torch.Tensor:

@@ -70,6 +70,15 @@ class Config:
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
 
     @property
+    def thr_dict(self):
+        return {
+            'high': 0.9,
+            'median': 0.5,
+            'low': 0.1,
+            'corr': 0.6
+        }
+
+    @property
     def schedule_per_epoch(self) -> bool:
         d = {
             'torch.optim.lr_scheduler.CosineAnnealingLR': True,
@@ -118,6 +127,7 @@ class Config:
         d['labels'] = self.labels
         d['scheduler_params'] = self.scheduler_params
         d['training_dataset_size'] = self.training_dataset_size
+        d['thr_dict'] = self.thr_dict
         return d
 
     @property
