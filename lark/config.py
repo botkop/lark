@@ -65,7 +65,6 @@ class Config:
     model: str = 'Cnn14_DecisionLevelAtt'
     optimizer: str = 'torch.optim.Adam'
     loss_fn: str = 'torch.nn.BCEWithLogitsLoss'
-    # loss_fn: str = 'PANNsLoss'
     scheduler: str = 'torch.optim.lr_scheduler.CosineAnnealingLR'
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
 

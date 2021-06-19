@@ -97,7 +97,7 @@ def do_work(rank, world_size):
         lr=1e-3,
         model='tf_efficientnet_b0_ns',
         scheduler='torch.optim.lr_scheduler.CosineAnnealingLR',
-        loss_fn='lark.ops.SigmoidFocalLossStar',
+        # loss_fn='lark.ops.SigmoidFocalLossStar',
         # loss_fn='lark.ops.SigmoidFocalLoss',
         use_pink_noise=0.1,
         use_recorded_noise=0.2,

@@ -6,8 +6,7 @@ import neptune
 import numpy as np
 import pandas as pd
 import torch
-# from tqdm.notebook import tqdm
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from lark.config import Config
 from lark.data import ValidDataset, TrainDataset
@@ -84,9 +83,11 @@ class Learner:
         n_batches = len(dl)
         with tqdm(dl, desc=f"{self.rank}:{mode}", leave=False, ascii=None, position=self.rank+2) as epoch_bar:
             for x, y in epoch_bar:
-                y = y.to(self.rank)
+                # y = y.to(self.rank)
                 pred = self.model(x)
-                loss = self.loss_fn(pred, y)
+                smooth_y = y.to(self.rank)
+                smooth_y[smooth_y == 0] = 0.01
+                loss = self.loss_fn(pred, smooth_y)
                 with torch.no_grad():
                     ps.append(pred.sigmoid())
                     ys.append(y)
