@@ -1,15 +1,14 @@
 import glob
 import math
-import os
 import random
 from typing import List
 
+import colorednoise as cn
 import numpy as np
 import pandas as pd
 import torch
 import torchaudio as ta
 from torch.utils.data import Dataset, DataLoader
-import colorednoise as cn
 
 from lark.config import Config
 
@@ -49,7 +48,6 @@ class ValidDataset(Dataset):
         self.length = len(df_ss)
         self.encoded_labels = torch.from_numpy(np.stack(df_ss.apply(self.make_label, axis=1).values))
         self.signals = torch.from_numpy(np.stack(df_ss.apply(self.read_sig, axis=1).values))
-        # self.df_ss = df_ss
 
     def read_sig(self, row):
         fname = glob.glob(f"{self.cfg.data_dir}/train_soundscapes.wav/{row.audio_id}_{row.site}_*.wav")[0]
@@ -70,11 +68,10 @@ class ValidDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.signals[idx], self.encoded_labels[idx]
-        # return self.read_sig(self.df_ss.iloc[idx]), self.encoded_labels[idx]
 
     @property
     def loader(self):
-        dl = DataLoader(self, batch_size=self.cfg.bs, shuffle=False, num_workers=self.cfg.n_workers, pin_memory=True)
+        dl = DataLoader(self, batch_size=self.cfg.bs, shuffle=False, num_workers=1, pin_memory=True)
         return dl
 
 
@@ -86,17 +83,7 @@ class TrainDataset(Dataset):
         self.size = cfg.training_dataset_size
         self.n_frames = int(self.cfg.train_duration * self.cfg.sr)
 
-        self.df_meta = pd.read_csv(f"{self.cfg.data_dir}/train_metadata.csv")
-        self.df_meta['secondary_labels'] = self.df_meta['secondary_labels'].str.replace("[\[\]',]", '',
-                                                                                        regex=True).str.split()
-        self.df_meta['filename'] = self.df_meta['filename'].str.replace(".ogg", '.wav', regex=False)
-        self.df_meta['filename'] = self.df_meta.apply(
-            lambda r: f"{self.cfg.data_dir}/train_short_audio.wav/{r['primary_label']}/{r['filename']}", axis=1)
-
-        self.df_meta['file_exists'] = self.df_meta.apply(lambda r: os.path.exists(r['filename']), axis=1)
-        self.df_meta = self.df_meta[self.df_meta['file_exists']]
-
-        self.df_meta['n_frames'] = self.df_meta.apply(lambda r: ta.info(r['filename']).num_frames, axis=1)
+        self.df_meta = cfg.df_train_meta
         self.df_meta = self.df_meta[self.df_meta['n_frames'] >= self.n_frames]
 
         self.pink_noise = torch.Tensor(cn.powerlaw_psd_gaussian(exponent=1, size=(1, self.n_frames)))

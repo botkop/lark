@@ -5,8 +5,10 @@ from datetime import datetime
 import neptune
 import numpy as np
 import pandas as pd
+import timm
 import torch
-from tqdm.auto import tqdm
+# from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from lark.config import Config
 from lark.data import ValidDataset, TrainDataset
@@ -41,6 +43,42 @@ class Experiment:
     def finish(self):
         if self.use_neptune:
             neptune.stop()
+
+
+class Backbone(torch.nn.Module):
+    def __init__(self, name='resnet18', pretrained=True):
+        super(Backbone, self).__init__()
+        self.net = timm.create_model(name, pretrained=pretrained)
+        if 'regnet' in name:
+            self.out_features = self.net.head.fc.in_features
+        elif 'vit' in name:
+            self.out_features = self.net.head.in_features
+        elif 'csp' in name:
+            self.out_features = self.net.head.fc.in_features
+        elif 'res' in name:  # works also for resnest
+            self.out_features = self.net.fc.in_features
+        elif 'efficientnet' in name:
+            self.out_features = self.net.classifier.in_features
+        elif 'densenet' in name:
+            self.out_features = self.net.classifier.in_features
+        elif 'senet' in name:
+            self.out_features = self.net.fc.in_features
+        elif 'inception' in name:
+            self.out_features = self.net.last_linear.in_features
+        else:
+            self.out_features = self.net.classifier.in_features
+
+        # remove unused parameters, otherwise DistributedDataParallel will balk
+        # see https://rwightman.github.io/pytorch-image-models/feature_extraction/#remove-it-later
+        self.net.reset_classifier(0, '')
+
+        self.global_pool = torch.nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, x):
+        x = self.net.forward_features(x)
+        x = self.global_pool(x)
+        x = x[:, :, 0, 0]
+        return x
 
 
 class Learner:

@@ -5,6 +5,7 @@ import os.path
 from dataclasses import dataclass
 from functools import partial
 from typing import List
+import torchaudio as ta
 
 import pandas as pd
 
@@ -66,7 +67,22 @@ class Config:
     optimizer: str = 'torch.optim.Adam'
     loss_fn: str = 'torch.nn.BCEWithLogitsLoss'
     scheduler: str = 'torch.optim.lr_scheduler.CosineAnnealingLR'
+
     # scheduler: str = 'torch.optim.lr_scheduler.OneCycleLR'
+
+    @property
+    def df_train_meta(self):
+        df_meta = pd.read_csv(f"{self.data_dir}/train_metadata.csv")
+        df_meta['secondary_labels'] = df_meta['secondary_labels'].str.replace("[\[\]',]", '',
+                                                                              regex=True).str.split()
+        df_meta['filename'] = df_meta['filename'].str.replace(".ogg", '.wav', regex=False)
+        df_meta['filename'] = df_meta.apply(
+            lambda r: f"{self.data_dir}/train_short_audio.wav/{r['primary_label']}/{r['filename']}", axis=1)
+
+        df_meta['file_exists'] = df_meta.apply(lambda r: os.path.exists(r['filename']), axis=1)
+        df_meta = df_meta[df_meta['file_exists']]
+        df_meta['n_frames'] = df_meta.apply(lambda r: ta.info(r['filename']).num_frames, axis=1)
+        return df_meta
 
     @property
     def thr_dict(self):

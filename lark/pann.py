@@ -120,6 +120,7 @@ class Cnn14_DecisionLevelAtt(nn.Module):
         init_layer(self.fc1)
 
     def forward(self, input):
+        print(input.shape)
         # input.shape = bs, 1, h, w
         x = input.permute(0, 2, 3, 1)
 
